@@ -4,6 +4,7 @@ from OpenAIAgent import OpenAIAgent
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import chat_memory_manager
+from fastapi.responses import StreamingResponse
 
 
 app = FastAPI()
@@ -24,7 +25,8 @@ class userInput(BaseModel):
 def Open_AI_Response_API(request: userInput):
     try:
         obj = OpenAIAgent()
-        return obj.get_ai_response(request.user_input, request.unique_session_id)
+        ai_response = obj.get_ai_response(request.user_input, request.unique_session_id)
+        return StreamingResponse(ai_response, media_type="text/event-stream") 
     except Exception as e:
         return {"error": e}
     

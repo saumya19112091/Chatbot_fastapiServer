@@ -7,15 +7,17 @@ from langchain.memory import ConversationBufferWindowMemory
 from datetime import datetime
 import requests
 import os
+from dotenv import load_dotenv
 
 
 class OpenAIAgent:
 
     def __init__(self) -> None:
-        pass
+        load_dotenv()
+
         
 
-    def get_ai_response(self, user_input: str, unique_session_id: str) -> str: 
+    async def get_ai_response(self, user_input: str, unique_session_id: str): 
 
         if(unique_session_id not in memoryStore):
             memoryStore[unique_session_id] = {
@@ -27,7 +29,7 @@ class OpenAIAgent:
 
         Unique_memory = memoryStore[unique_session_id]["memory"] 
 
-        openai_model = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0, api_key="sk-proj-2rWMi2HEgGH9zehlXWL3T3BlbkFJMx324ptSvq4FK6ch0lyg")
+        openai_model = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0, api_key=os.getenv("Open_api_key"))
 
         system = '''Respond to the human as helpfully and accurately as possible. You have access to the following tools:
 
@@ -128,7 +130,41 @@ class OpenAIAgent:
 
         open_ai_agent_executor = AgentExecutor(agent=open_ai_agent, tools=tools_list, max_iterations=10, verbose=True, handle_parsing_errors=True, memory=Unique_memory)
 
-        agent_response = open_ai_agent_executor.invoke({"input": user_input})
+        buffer = ""
+        action_input_start = False
+        final_answer_found = False
 
-        return agent_response
+        async for event in open_ai_agent_executor.astream_events({"input": user_input}, version="v1"):
+            kind = event["event"]
+            if kind == "on_chat_model_stream":
+                content = event["data"]["chunk"].content
+                buffer += content  # Append the incoming stream content to the buffer
 
+                # Check for the start of the "Final Answer" section
+                if "Final Answer" in buffer and not final_answer_found:
+                    final_answer_found = True
+                    buffer = ""
+
+                if final_answer_found:
+                    # Check for the start of the "action_input" segment
+                    if '"action_input":' in buffer and not action_input_start:
+                        start_index = buffer.find('"action_input":') + len('"action_input":') + 1
+                        action_input_start = True
+                        buffer = buffer[start_index:]  # Remove everything before "action_input"
+
+                    # If we're within the "action_input" section, start yielding
+                    if action_input_start:
+                        closing_index = buffer.find('}')
+                        if closing_index != -1:
+                            # Stop yielding if we've reached the end of "action_input"
+                            action_input_content = buffer[:closing_index].strip('"')
+                            yield action_input_content
+                            buffer = ""
+                            final_answer_found = False  # Reset for next potential "Final Answer"
+                            action_input_start = False
+                        else:
+                            # Yield the current buffer content as it's part of "action_input"
+                            action_input_content = buffer.strip('"')
+                            print(action_input_content, end="", flush=True)
+                            yield action_input_content
+                            buffer = ""  # Clear buffer to avoid re-yielding the same content
